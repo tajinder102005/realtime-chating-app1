@@ -1,33 +1,71 @@
-import Message from "../models/Message.js";
-import Conversation from "../models/Conversation.js";
+import { supabase } from "../config/supabase.js";
 
 // Send a message
 export const sendMessage = async (req, res) => {
     try {
         const { receiverId, content } = req.body;
-        const senderId = req.user._id;
+        const senderId = req.user.id;
 
         // Find or create conversation
-        let conversation = await Conversation.findOne({
-            participants: { $all: [senderId, receiverId] },
-        });
+        const { data: existingConversations, error: findError } = await supabase
+            .from('conversations')
+            .select('*')
+            .contains('participants', [senderId, receiverId]);
 
-        if (!conversation) {
-            conversation = await Conversation.create({
-                participants: [senderId, receiverId],
-            });
+        if (findError) {
+            return res.status(500).json({ message: findError.message });
+        }
+
+        let conversation;
+        if (existingConversations && existingConversations.length > 0) {
+            conversation = existingConversations[0];
+        } else {
+            // Create new conversation
+            const { data: newConversation, error: createError } = await supabase
+                .from('conversations')
+                .insert([{
+                    participants: [senderId, receiverId],
+                    is_group: false,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }])
+                .select()
+                .single();
+
+            if (createError) {
+                return res.status(500).json({ message: createError.message });
+            }
+            conversation = newConversation;
         }
 
         // Create message
-        const message = await Message.create({
-            conversationId: conversation._id,
-            sender: senderId,
-            content,
-        });
+        const { data: message, error: messageError } = await supabase
+            .from('messages')
+            .insert([{
+                conversation_id: conversation.id,
+                sender_id: senderId,
+                content: content,
+                created_at: new Date().toISOString()
+            }])
+            .select()
+            .single();
 
-        // Update lastMessage
-        conversation.lastMessage = message._id;
-        await conversation.save();
+        if (messageError) {
+            return res.status(500).json({ message: messageError.message });
+        }
+
+        // Update lastMessage in conversation
+        const { error: updateError } = await supabase
+            .from('conversations')
+            .update({
+                last_message: message.id,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', conversation.id);
+
+        if (updateError) {
+            return res.status(500).json({ message: updateError.message });
+        }
 
         res.status(201).json(message);
     } catch (error) {
@@ -39,9 +77,18 @@ export const sendMessage = async (req, res) => {
 export const getMessages = async (req, res) => {
     try {
         const { conversationId } = req.params;
-        const messages = await Message.find({ conversationId })
-            .populate("sender", "name email")
-            .sort({ createdAt: 1 });
+        const { data: messages, error } = await supabase
+            .from('messages')
+            .select(`
+                *,
+                sender:users(id, name, email)
+            `)
+            .eq('conversation_id', conversationId)
+            .order('created_at', { ascending: true });
+
+        if (error) {
+            return res.status(500).json({ message: error.message });
+        }
 
         res.json(messages);
     } catch (error) {
@@ -53,16 +100,21 @@ export const getMessages = async (req, res) => {
 export const markRead = async (req, res) => {
     try {
         const { conversationId } = req.params;
-        const userId = req.user._id;
+        const userId = req.user.id;
 
-        await Message.updateMany(
-            {
-                conversationId,
-                sender: { $ne: userId },      // not sent by me
-                readBy: { $ne: userId },       // not already read by me
-            },
-            { $addToSet: { readBy: userId } }
-        );
+        const { error } = await supabase
+            .from('messages')
+            .update({
+                read_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            })
+            .eq('conversation_id', conversationId)
+            .neq('sender_id', userId)
+            .is('read_at', null);
+
+        if (error) {
+            return res.status(500).json({ message: error.message });
+        }
 
         res.json({ success: true });
     } catch (error) {
@@ -74,20 +126,41 @@ export const markRead = async (req, res) => {
 export const getOrCreateConversation = async (req, res) => {
     try {
         const { userId } = req.params;
-        const myId = req.user._id;
+        const myId = req.user.id;
 
-        let conversation = await Conversation.findOne({
-            isGroup: false,
-            participants: { $all: [myId, userId] },
-        });
+        const { data: existingConversations, error: findError } = await supabase
+            .from('conversations')
+            .select('*')
+            .eq('is_group', false)
+            .contains('participants', [myId, userId]);
 
-        if (!conversation) {
-            conversation = await Conversation.create({
-                participants: [myId, userId],
-            });
+        if (findError) {
+            return res.status(500).json({ message: findError.message });
         }
 
-        res.json({ conversationId: conversation._id });
+        let conversation;
+        if (existingConversations && existingConversations.length > 0) {
+            conversation = existingConversations[0];
+        } else {
+            // Create new conversation
+            const { data: newConversation, error: createError } = await supabase
+                .from('conversations')
+                .insert([{
+                    participants: [myId, userId],
+                    is_group: false,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }])
+                .select()
+                .single();
+
+            if (createError) {
+                return res.status(500).json({ message: createError.message });
+            }
+            conversation = newConversation;
+        }
+
+        res.json({ conversationId: conversation.id });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -96,12 +169,19 @@ export const getOrCreateConversation = async (req, res) => {
 // Get all conversations for logged-in user
 export const getConversations = async (req, res) => {
     try {
-        const conversations = await Conversation.find({
-            participants: req.user._id,
-        })
-            .populate("participants", "name email")
-            .populate("lastMessage")
-            .sort({ updatedAt: -1 });
+        const { data: conversations, error } = await supabase
+            .from('conversations')
+            .select(`
+                *,
+                participants:users(id, name, email),
+                last_message:messages(id, content, created_at, sender_id)
+            `)
+            .contains('participants', [req.user.id])
+            .order('updated_at', { ascending: false });
+
+        if (error) {
+            return res.status(500).json({ message: error.message });
+        }
 
         res.json(conversations);
     } catch (error) {
