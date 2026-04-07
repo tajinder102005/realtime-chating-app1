@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
-import axios from "axios";
 
 const Register = () => {
     const [name, setName] = useState("");
@@ -9,7 +8,7 @@ const Register = () => {
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
-    const { login } = useAuth();
+    const { register, signInWithOAuth } = useAuth();
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
@@ -18,15 +17,30 @@ const Register = () => {
         setLoading(true);
 
         try {
-            const { data } = await axios.post(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/register`, {
-                name,
-                email,
-                password,
-            });
-            login(data.user, data.token);
-            navigate("/chat");
+            const result = await register(name, email, password);
+            if (result.success) {
+                navigate("/chat");
+            } else {
+                setError(result.error || "Registration failed");
+            }
         } catch (err) {
             setError(err.response?.data?.message || "Registration failed");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleOAuthLogin = async (provider) => {
+        setError("");
+        setLoading(true);
+
+        try {
+            const result = await signInWithOAuth(provider);
+            if (!result.success) {
+                setError(result.error || `${provider} login failed`);
+            }
+        } catch (err) {
+            setError(`${provider} login failed`);
         } finally {
             setLoading(false);
         }
@@ -42,6 +56,32 @@ const Register = () => {
 
                 {error && <div className="auth-error">{error}</div>}
 
+                {/* OAuth Login Buttons */}
+                <div className="oauth-section">
+                    <button
+                        className="oauth-btn google-btn"
+                        onClick={() => handleOAuthLogin('google')}
+                        disabled={loading}
+                    >
+                        <span className="oauth-icon">🔍</span>
+                        Continue with Google
+                    </button>
+
+                    <button
+                        className="oauth-btn github-btn"
+                        onClick={() => handleOAuthLogin('github')}
+                        disabled={loading}
+                    >
+                        <span className="oauth-icon">🐙</span>
+                        Continue with GitHub
+                    </button>
+                </div>
+
+                <div className="auth-divider">
+                    <span>OR</span>
+                </div>
+
+                {/* Email/Password Form */}
                 <form onSubmit={handleSubmit} className="auth-form">
                     <div className="form-group">
                         <label htmlFor="name">Full Name</label>
@@ -52,6 +92,7 @@ const Register = () => {
                             value={name}
                             onChange={(e) => setName(e.target.value)}
                             required
+                            disabled={loading}
                         />
                     </div>
 
@@ -64,6 +105,7 @@ const Register = () => {
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required
+                            disabled={loading}
                         />
                     </div>
 
@@ -77,6 +119,7 @@ const Register = () => {
                             onChange={(e) => setPassword(e.target.value)}
                             required
                             minLength={6}
+                            disabled={loading}
                         />
                     </div>
 

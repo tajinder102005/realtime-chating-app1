@@ -21,7 +21,7 @@ const ProfileModal = ({ onClose }) => {
 
         try {
             const { data } = await axios.put(
-                "http://localhost:5000/api/users/profile",
+                `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/users/profile`,
                 { name: name.trim() },
                 { headers: { Authorization: `Bearer ${token}` } }
             );

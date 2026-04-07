@@ -1,7 +1,5 @@
 import jwt from "jsonwebtoken";
-import User from "../models/User.js";
-import Message from "../models/Message.js";
-import Conversation from "../models/Conversation.js";
+import { supabase } from "../config/supabase.js";
 
 // 🔥 Map: userId → socketId (tracks who's connected)
 const onlineUsers = new Map();
@@ -18,8 +16,13 @@ export const setupSocket = (io) => {
             }
 
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            const user = await User.findById(decoded.id).select("-password");
-            if (!user) {
+            const { data: user, error } = await supabase
+                .from('users')
+                .select('*')
+                .eq('id', decoded.id)
+                .single();
+
+            if (error || !user) {
                 return next(new Error("Authentication error: User not found"));
             }
 
@@ -32,7 +35,7 @@ export const setupSocket = (io) => {
 
     // 🔥 Handle connections
     io.on("connection", (socket) => {
-        const userId = socket.user._id.toString();
+        const userId = socket.user.id;
         console.log(`✅ User connected: ${socket.user.name} (${userId})`);
 
         // Add to online users map
@@ -46,40 +49,78 @@ export const setupSocket = (io) => {
         // ──────────────────────────────────────────────
         socket.on("sendMessage", async ({ receiverId, content }) => {
             try {
-                let conversation = await Conversation.findOne({
-                    isGroup: false,
-                    participants: { $all: [userId, receiverId] },
-                });
+                // Get or create conversation
+                let { data: conversation, error: convError } = await supabase
+                    .from('conversations')
+                    .select('*')
+                    .eq('is_group', false)
+                    .contains('participants', [userId, receiverId])
+                    .single();
 
-                if (!conversation) {
-                    conversation = await Conversation.create({
-                        participants: [userId, receiverId],
-                    });
+                if (convError && convError.code === 'PGRST116') {
+                    // Conversation doesn't exist, create it
+                    const { data: newConv, error: createError } = await supabase
+                        .from('conversations')
+                        .insert([{
+                            participants: [userId, receiverId],
+                            is_group: false,
+                            created_at: new Date().toISOString()
+                        }])
+                        .select()
+                        .single();
+
+                    if (createError) throw createError;
+                    conversation = newConv;
+                } else if (convError) {
+                    throw convError;
                 }
 
-                const message = await Message.create({
-                    conversationId: conversation._id,
-                    sender: userId,
-                    content,
-                });
+                // Create message
+                const { data: message, error: msgError } = await supabase
+                    .from('messages')
+                    .insert([{
+                        conversation_id: conversation.id,
+                        sender_id: userId,
+                        content: content,
+                        created_at: new Date().toISOString()
+                    }])
+                    .select()
+                    .single();
 
-                conversation.lastMessage = message._id;
-                await conversation.save();
+                if (msgError) throw msgError;
 
-                const populatedMessage = await Message.findById(message._id)
-                    .populate("sender", "name email");
+                // Update conversation's last message
+                await supabase
+                    .from('conversations')
+                    .update({
+                        last_message: content,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', conversation.id);
+
+                // Get sender info
+                const { data: senderData } = await supabase
+                    .from('users')
+                    .select('name, email')
+                    .eq('id', userId)
+                    .single();
+
+                const populatedMessage = {
+                    ...message,
+                    sender: senderData
+                };
 
                 const receiverSocketId = onlineUsers.get(receiverId);
                 if (receiverSocketId) {
                     io.to(receiverSocketId).emit("receiveMessage", {
                         message: populatedMessage,
-                        conversationId: conversation._id,
+                        conversationId: conversation.id,
                     });
                 }
 
                 socket.emit("messageSent", {
                     message: populatedMessage,
-                    conversationId: conversation._id,
+                    conversationId: conversation.id,
                 });
             } catch (error) {
                 console.error("Error sending message:", error.message);
@@ -90,19 +131,6 @@ export const setupSocket = (io) => {
         // ──────────────────────────────────────────────
         // ⌨️ TYPING INDICATORS (Phase 2 - NEW!)
         // ──────────────────────────────────────────────
-        //
-        // HOW IT WORKS:
-        // 1. When Alice starts typing, her frontend emits "typing" 
-        //    with Bob's userId as receiverId
-        // 2. The server receives it and forwards it to Bob's socket
-        // 3. Bob's frontend shows "Alice is typing..."
-        // 4. When Alice stops typing (after 2 sec timeout), 
-        //    her frontend emits "stopTyping"
-        // 5. The server forwards it to Bob → typing indicator disappears
-        //
-        // ⚠️ These events are NOT saved to the database — they're 
-        //    "ephemeral" (temporary). No point storing "typing" in DB!
-        //
         socket.on("typing", ({ receiverId }) => {
             const receiverSocketId = onlineUsers.get(receiverId);
             if (receiverSocketId) {
@@ -126,13 +154,6 @@ export const setupSocket = (io) => {
         // ──────────────────────────────────────────────
         // 👁️ READ RECEIPTS (Phase 4 - NEW!)
         // ──────────────────────────────────────────────
-        //
-        // HOW IT WORKS:
-        // 1. When Bob opens a conversation with Alice, his frontend emits
-        //    "markRead" with Alice's userId (the other person's id)
-        // 2. The server finds Alice's socket and emits "messagesRead" to her
-        // 3. Alice's frontend updates the tick on her sent messages to ✓✓
-        //
         socket.on("markRead", ({ senderId, conversationId }) => {
             const senderSocketId = onlineUsers.get(senderId);
             if (senderSocketId) {
@@ -146,13 +167,6 @@ export const setupSocket = (io) => {
         // ──────────────────────────────────────────────
         // 🔌 DISCONNECT (Phase 2 - Updated!)
         // ──────────────────────────────────────────────
-        //
-        // HOW "LAST SEEN" WORKS:
-        // When a user disconnects, we save the current timestamp 
-        // to their `lastSeen` field in MongoDB. Next time someone 
-        // opens the sidebar, they'll see "Last seen 5 mins ago" 
-        // instead of just "Offline".
-        //
         socket.on("disconnect", async () => {
             console.log(`❌ User disconnected: ${socket.user.name}`);
             onlineUsers.delete(userId);
@@ -160,9 +174,10 @@ export const setupSocket = (io) => {
 
             // 🆕 Save lastSeen timestamp to database
             try {
-                await User.findByIdAndUpdate(userId, {
-                    lastSeen: new Date(),
-                });
+                await supabase
+                    .from('users')
+                    .update({ last_seen: new Date().toISOString() })
+                    .eq('id', userId);
             } catch (error) {
                 console.error("Error updating lastSeen:", error.message);
             }

@@ -15,7 +15,7 @@ const Sidebar = ({ onSelectUser, selectedUserId, onlineUsers }) => {
 
     const fetchUsers = async () => {
         try {
-            const { data } = await axios.get("http://localhost:5000/api/users/all", {
+            const { data } = await axios.get(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/users/all`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             setUsers(data);
@@ -87,23 +87,23 @@ const Sidebar = ({ onSelectUser, selectedUserId, onlineUsers }) => {
                 <div className="user-list">
                     {filteredUsers.map((u) => (
                         <div
-                            key={u._id}
-                            className={`user-item ${selectedUserId === u._id ? "active" : ""}`}
+                            key={u.id}
+                            className={`user-item ${selectedUserId === u.id ? "active" : ""}`}
                             onClick={() => onSelectUser(u)}
                         >
                             <div className="user-avatar">
                                 {getInitials(u.name)}
                                 <span
-                                    className={`status-dot ${onlineUsers.includes(u._id) ? "online" : "offline"
+                                    className={`status-dot ${onlineUsers.includes(u.id) ? "online" : "offline"
                                         }`}
                                 />
                             </div>
                             <div className="user-info">
                                 <span className="user-name">{u.name}</span>
                                 <span className="user-status-text">
-                                    {onlineUsers.includes(u._id)
+                                    {onlineUsers.includes(u.id)
                                         ? "Online"
-                                        : formatLastSeen(u.lastSeen)}
+                                        : formatLastSeen(u.updated_at)}
                                 </span>
                             </div>
                         </div>

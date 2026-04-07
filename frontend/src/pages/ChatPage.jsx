@@ -37,7 +37,7 @@ const ChatPage = () => {
         <div className="chat-layout">
             <Sidebar
                 onSelectUser={setSelectedUser}
-                selectedUserId={selectedUser?._id}
+                selectedUserId={selectedUser?.id}
                 onlineUsers={onlineUsers}
             />
             <MessageArea

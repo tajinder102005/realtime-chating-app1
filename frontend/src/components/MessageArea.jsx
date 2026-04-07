@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 
-const API = "http://localhost:5000/api";
+const API = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
 const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
     const [messages, setMessages] = useState([]);
@@ -48,7 +48,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
             try {
                 // Step 1: Get (or create) the conversation between us
                 const { data: convData } = await axios.get(
-                    `${API}/messages/conversation/${selectedUser._id}`,
+                    `${API}/messages/conversation/${selectedUser.id}`,
                     { headers: { Authorization: `Bearer ${token}` } }
                 );
                 if (cancelled) return;
@@ -73,7 +73,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
                 ).then(() => {
                     if (socketRef.current && !cancelled) {
                         socketRef.current.emit("markRead", {
-                            senderId: selectedUser._id,
+                            senderId: selectedUser.id,
                             conversationId: convId,
                         });
                     }
@@ -97,8 +97,8 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
 
         const handleReceive = ({ message, conversationId: incomingConvId }) => {
             const selUser = selectedUserRef.current;
-            const senderId = message.sender?._id || message.sender;
-            if (senderId !== selUser?._id) return;
+            const senderId = message.sender?.id || message.sender;
+            if (senderId !== selUser?.id) return;
 
             setMessages((prev) => [...prev, message]);
             setIsOtherUserTyping(false);
@@ -143,7 +143,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
         };
 
         const handleMessagesRead = ({ readerId }) => {
-            if (readerId !== selectedUserRef.current?._id) return;
+            if (readerId !== selectedUserRef.current?.id) return;
             setMessages((prev) =>
                 prev.map((msg) => {
                     const senderId = msg.sender?._id || msg.sender;
@@ -178,13 +178,13 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
 
         if (!isTyping) {
             setIsTyping(true);
-            socket.emit("typing", { receiverId: selectedUser._id });
+            socket.emit("typing", { receiverId: selectedUser.id });
         }
 
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = setTimeout(() => {
             setIsTyping(false);
-            socket.emit("stopTyping", { receiverId: selectedUser._id });
+            socket.emit("stopTyping", { receiverId: selectedUser.id });
         }, 2000);
     };
 
@@ -197,7 +197,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
         setIsTyping(false);
         socket.emit("stopTyping", { receiverId: selectedUser._id });
         socket.emit("sendMessage", {
-            receiverId: selectedUser._id,
+            receiverId: selectedUser.id,
             content: newMessage.trim(),
         });
         setNewMessage("");
@@ -216,7 +216,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
     };
 
     const ReadTick = ({ msg }) => {
-        const senderId = msg.sender?._id || msg.sender;
+        const senderId = msg.sender?.id || msg.sender;
         if (senderId !== user?.id) return null;
         const isSeen = msg.readBy && msg.readBy.length > 0;
         return (
@@ -239,7 +239,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
         );
     }
 
-    const isOnline = onlineUsers.includes(selectedUser._id);
+    const isOnline = onlineUsers.includes(selectedUser.id);
 
     return (
         <div className="message-area">
@@ -253,7 +253,7 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
                     <div>
                         <h3>{selectedUser.name}</h3>
                         <span className={`header-status ${isOnline ? "online" : ""}`}>
-                            {isOnline ? "Online" : `Last seen ${formatLastSeen(selectedUser.lastSeen)}`}
+                            {isOnline ? "Online" : `Last seen ${formatLastSeen(selectedUser.updated_at)}`}
                         </span>
                     </div>
                 </div>
@@ -276,15 +276,15 @@ const MessageArea = ({ selectedUser, socket, onlineUsers }) => {
                 )}
 
                 {messages.map((msg, index) => {
-                    const senderId = msg.sender?._id || msg.sender;
+                    const senderId = msg.sender?.id || msg.sender;
                     const isMine = senderId === user?.id;
                     return (
-                        <div key={msg._id || index} className={`message ${isMine ? "sent" : "received"}`}>
+                        <div key={msg.id || index} className={`message ${isMine ? "sent" : "received"}`}>
                             <div className="message-bubble">
                                 <p>{msg.content}</p>
                                 <div className="message-meta">
                                     <span className="message-time">
-                                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                                        {new Date(msg.created_at).toLocaleTimeString([], {
                                             hour: "2-digit",
                                             minute: "2-digit",
                                         })}
